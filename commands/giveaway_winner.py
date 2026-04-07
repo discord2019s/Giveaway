@@ -183,12 +183,11 @@ class GiveawayWinnersView(discord.ui.View):
             self.start_anti_join()
     
     def start_anti_join(self):
-        """Start the gradual anti-join system"""
+        """Start the gradual anti-join system without any notifications"""
         async def anti_join_loop():
             current_fake_count = len(self.fake_participants) - self.fake_members_count
             
             # Calculate base delay based on giveaway duration
-            # Shorter giveaway = faster joins, Longer giveaway = slower joins
             if self.duration_seconds <= 300:  # 5 minutes or less
                 min_delay = 5
                 max_delay = 15
@@ -206,20 +205,15 @@ class GiveawayWinnersView(discord.ui.View):
                 max_delay = 120
             
             while not self.ended and current_fake_count < self.target_anti_join:
-                # Random wait time between min_delay and max_delay seconds
                 wait_time = random.randint(min_delay, max_delay)
                 await asyncio.sleep(wait_time)
                 
                 if self.ended:
                     break
                 
-                # Calculate remaining needed
                 remaining = self.target_anti_join - current_fake_count
-                
-                # Random number of fake users to add (1-3, but not more than remaining)
                 add_count = random.randint(1, min(3, remaining))
                 
-                # Add fake users
                 start_index = self.fake_members_count + current_fake_count
                 for i in range(add_count):
                     if start_index + i < len(FAKE_USER_IDS):
@@ -227,13 +221,8 @@ class GiveawayWinnersView(discord.ui.View):
                 
                 current_fake_count = len(self.fake_participants) - self.fake_members_count
                 
-                # Update the embed
+                # Update the embed only (no message sent to channel)
                 await self.update_embed()
-                
-                # Send notification to channel (optional - you can remove this)
-                channel = self.bot.get_channel(self.channel_id)
-                if channel:
-                    await channel.send(f"🎭 **+{add_count}** new participants joined the giveaway! ({current_fake_count}/{self.target_anti_join})")
             
             self.anti_join_task = None
         
@@ -470,7 +459,7 @@ def setup_giveaway_winner(bot):
         how_winners="Mention specific winners (they win even if not joined)",
         limit="Maximum participants (0 for unlimited)",
         fake_members="Number of fake members to add instantly",
-        anti_join="Number of fake members to add gradually over time",
+        anti_join="Number of fake members to add gradually over time (no notifications)",
         everyday="Repeat automatically? true/false",
         every_giveaway="Time between repeats: 30m, 2h, 1d, 12h (default: 24h)"
     )
@@ -530,7 +519,7 @@ def setup_giveaway_winner(bot):
         if fake_members > 0:
             confirm_msg += f"\n🎭 Instant fake members: +{fake_members}"
         if anti_join > 0:
-            confirm_msg += f"\n🚀 Anti-Join: +{anti_join} members will join randomly over time"
+            confirm_msg += f"\n🚀 Anti-Join: +{anti_join} members will join randomly over time (no notifications)"
         
         await interaction.response.send_message(confirm_msg, ephemeral=True)
         message = await channel.send(embed=embed, view=view)
