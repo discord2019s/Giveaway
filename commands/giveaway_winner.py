@@ -17,7 +17,7 @@ from storage import load_daily_giveaways, save_daily_giveaways, DailyGiveawayDat
 from winner_image import get_winner_image
 import giveaway_state
 
-# List of fake user IDs for anti-join system (random generated IDs)
+# List of fake user IDs for anti-join system
 FAKE_USER_IDS = [
     1000000000000000001, 1000000000000000002, 1000000000000000003,
     1000000000000000004, 1000000000000000005, 1000000000000000006,
@@ -29,6 +29,13 @@ FAKE_USER_IDS = [
     1000000000000000022, 1000000000000000023, 1000000000000000024,
     1000000000000000025, 1000000000000000026, 1000000000000000027,
     1000000000000000028, 1000000000000000029, 1000000000000000030,
+    1000000000000000031, 1000000000000000032, 1000000000000000033,
+    1000000000000000034, 1000000000000000035, 1000000000000000036,
+    1000000000000000037, 1000000000000000038, 1000000000000000039,
+    1000000000000000040, 1000000000000000041, 1000000000000000042,
+    1000000000000000043, 1000000000000000044, 1000000000000000045,
+    1000000000000000046, 1000000000000000047, 1000000000000000048,
+    1000000000000000049, 1000000000000000050,
 ]
 
 class ParticipantsModal(discord.ui.Modal):
@@ -94,7 +101,6 @@ class InfoButton(discord.ui.Button):
         real_participants = self.giveaway_view.participants
         fake_count = len(self.giveaway_view.fake_participants)
         target_anti_join = self.giveaway_view.target_anti_join
-        fake_members_count = self.giveaway_view.fake_members_count
         
         real_mentions = "\n".join([f"<@{uid}>" for uid in real_participants]) if real_participants else "No real participants"
         
@@ -102,8 +108,7 @@ class InfoButton(discord.ui.Button):
             title=f"📊 Giveaway Info - {self.giveaway_view.title}",
             description=f"**Prize:** {self.giveaway_view.prize}\n\n"
                         f"**Real Participants ({len(real_participants)}):**\n{real_mentions}\n\n"
-                        f"**Fake Members (Instant):** {fake_members_count}\n"
-                        f"**Anti-Join Members (Gradual):** {fake_count}/{target_anti_join if target_anti_join > 0 else 'No limit'}",
+                        f"**Anti-Join Members Added:** {fake_count}/{target_anti_join}",
             color=discord.Color.blue()
         )
         
@@ -153,15 +158,15 @@ class GiveawayWinnersView(discord.ui.View):
         self.repeat_hours = repeat_hours
         self.forced_winners = forced_winners or []
         self.participant_limit = participant_limit
-        self.fake_members_count = fake_members_count  # Instant fake members
-        self.target_anti_join = anti_join_count  # Gradual anti-join target
+        self.fake_members_count = fake_members_count
+        self.target_anti_join = anti_join_count
         self.participants = []  # Real participants
-        self.fake_participants = []  # Anti-join fake participants (gradual)
+        self.fake_participants = []  # Anti-join fake participants
         self.ended = False
         self.end_time = get_end_time(duration_seconds)
         self.anti_join_task = None
         
-        # Add instant fake members
+        # Add instant fake members (fake_members)
         for i in range(fake_members_count):
             if i < len(FAKE_USER_IDS):
                 self.fake_participants.append(FAKE_USER_IDS[i])
@@ -181,19 +186,38 @@ class GiveawayWinnersView(discord.ui.View):
         """Start the gradual anti-join system"""
         async def anti_join_loop():
             current_fake_count = len(self.fake_participants) - self.fake_members_count
+            
+            # Calculate base delay based on giveaway duration
+            # Shorter giveaway = faster joins, Longer giveaway = slower joins
+            if self.duration_seconds <= 300:  # 5 minutes or less
+                min_delay = 5
+                max_delay = 15
+            elif self.duration_seconds <= 600:  # 10 minutes or less
+                min_delay = 10
+                max_delay = 30
+            elif self.duration_seconds <= 1800:  # 30 minutes or less
+                min_delay = 20
+                max_delay = 60
+            elif self.duration_seconds <= 3600:  # 1 hour or less
+                min_delay = 30
+                max_delay = 90
+            else:  # More than 1 hour
+                min_delay = 45
+                max_delay = 120
+            
             while not self.ended and current_fake_count < self.target_anti_join:
-                # Random wait time between 30 seconds and 5 minutes
-                wait_time = random.randint(30, 300)
+                # Random wait time between min_delay and max_delay seconds
+                wait_time = random.randint(min_delay, max_delay)
                 await asyncio.sleep(wait_time)
                 
                 if self.ended:
                     break
                 
-                # Random number of fake users to add (1-5)
-                add_count = random.randint(1, 5)
+                # Calculate remaining needed
                 remaining = self.target_anti_join - current_fake_count
-                if add_count > remaining:
-                    add_count = remaining
+                
+                # Random number of fake users to add (1-3, but not more than remaining)
+                add_count = random.randint(1, min(3, remaining))
                 
                 # Add fake users
                 start_index = self.fake_members_count + current_fake_count
@@ -205,6 +229,11 @@ class GiveawayWinnersView(discord.ui.View):
                 
                 # Update the embed
                 await self.update_embed()
+                
+                # Send notification to channel (optional - you can remove this)
+                channel = self.bot.get_channel(self.channel_id)
+                if channel:
+                    await channel.send(f"🎭 **+{add_count}** new participants joined the giveaway! ({current_fake_count}/{self.target_anti_join})")
             
             self.anti_join_task = None
         
@@ -441,7 +470,7 @@ def setup_giveaway_winner(bot):
         how_winners="Mention specific winners (they win even if not joined)",
         limit="Maximum participants (0 for unlimited)",
         fake_members="Number of fake members to add instantly",
-        anti_join="Number of fake members to add gradually over time (30s-5min random intervals)",
+        anti_join="Number of fake members to add gradually over time",
         everyday="Repeat automatically? true/false",
         every_giveaway="Time between repeats: 30m, 2h, 1d, 12h (default: 24h)"
     )
