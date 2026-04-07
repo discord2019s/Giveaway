@@ -205,11 +205,6 @@ class GiveawayWinnersView(discord.ui.View):
                 
                 # Update the embed
                 await self.update_embed()
-                
-                # Send notification to channel
-                channel = self.bot.get_channel(self.channel_id)
-                if channel:
-                    await channel.send(f"🎭 **Anti-Join System:** +{add_count} new participants have joined the giveaway! ({current_fake_count}/{self.target_anti_join})")
             
             self.anti_join_task = None
         
@@ -352,8 +347,6 @@ class GiveawayWinnersView(discord.ui.View):
         if self.description:
             description_text += f"{EMOJI_TROPHY} {self.description}\n\n"
         description_text += f"{EMOJI_PARTICIPANTS} **Total Participants:** `{self.get_total_participants_display()}`\n"
-        description_text += f"👤 **Real Participants:** `{len(self.participants)}`\n"
-        description_text += f"🎭 **Fake Participants:** `{len(self.fake_participants)}`\n"
         if self.forced_winners:
             description_text += f"{EMOJI_TROPHY} **Forced Winner(s):** {winner_mentions}\n"
         else:
@@ -393,12 +386,6 @@ class GiveawayWinnersView(discord.ui.View):
         description_text += f"{EMOJI_LINE*12}\n"
         description_text += f"{EMOJI_TROPHY} **Winners:** `{self.winners_count}`\n"
         description_text += f"{EMOJI_PARTICIPANTS} **Participants:** `{total_participants}`\n"
-        
-        # Show anti-join progress if active
-        if self.target_anti_join > 0:
-            current_anti_join = len(self.fake_participants) - self.fake_members_count
-            description_text += f"🎭 **Anti-Join Progress:** `{current_anti_join}/{self.target_anti_join}`\n"
-        
         description_text += f"{EMOJI_TIME} **Time Left:** `{time_left}`\n"
         description_text += f"{EMOJI_ENDS} **Ends:** <t:{end_timestamp}:R>\n"
         description_text += f"{EMOJI_HOSTED} **Hosted by:** <@{self.bot.user.id}>\n"
@@ -514,7 +501,7 @@ def setup_giveaway_winner(bot):
         if fake_members > 0:
             confirm_msg += f"\n🎭 Instant fake members: +{fake_members}"
         if anti_join > 0:
-            confirm_msg += f"\n🚀 Anti-Join (gradual): +{anti_join} members will join randomly over time"
+            confirm_msg += f"\n🚀 Anti-Join: +{anti_join} members will join randomly over time"
         
         await interaction.response.send_message(confirm_msg, ephemeral=True)
         message = await channel.send(embed=embed, view=view)
