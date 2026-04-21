@@ -6,7 +6,7 @@ import asyncio
 import random
 import re
 from datetime import datetime, timedelta
-from utils import parse_duration, format_time, get_end_time
+from utils import parse_duration, format_time
 from config import (
     GIVEAWAY_THUMBNAIL_URL, GIVEAWAY_BANNER_URL,
     EMOJI_GIVEAWAY, EMOJI_TROPHY, EMOJI_PARTICIPANTS, EMOJI_TIME,
@@ -180,7 +180,6 @@ class GiveawayWinnersView(discord.ui.View):
         self.description = description
         self.prize = prize
         self.winners_count = winners_count
-        self.initial_duration = duration_seconds
         self.duration_seconds = duration_seconds
         self.is_daily = is_daily
         self.repeat_hours = repeat_hours
@@ -191,10 +190,10 @@ class GiveawayWinnersView(discord.ui.View):
         self.participants = []
         self.fake_participants = []
         self.ended = False
-        self.end_time = get_end_time(duration_seconds)
+        self.start_time = datetime.now()
+        self.end_time = self.start_time + timedelta(seconds=duration_seconds)
         self.anti_join_task = None
-        self.end_task = None
-        self.update_task = None
+        self.check_task = None
         
         # Add instant fake members
         for i in range(fake_members_count):
@@ -207,32 +206,13 @@ class GiveawayWinnersView(discord.ui.View):
         
         if message_id != 0:
             giveaway_state.register_giveaway(message_id, self, is_winner=True)
-            self.start_end_timer()
         
         # Start anti-join system if needed
         if anti_join_count > 0:
             self.start_anti_join()
         
-        # Start auto-update every second
-        self.start_auto_update()
-    
-    def start_auto_update(self):
-        """Auto update embed every second to show remaining time"""
-        async def auto_update():
-            while not self.ended:
-                await asyncio.sleep(1)
-                if not self.ended:
-                    now = datetime.now()
-                    remaining = int((self.end_time - now).total_seconds())
-                    if remaining <= 0:
-                        if not self.ended:
-                            await self.end_giveaway()
-                        break
-                    self.duration_seconds = remaining
-                    await self.update_embed()
-            self.update_task = None
-        
-        self.update_task = asyncio.create_task(auto_update())
+        # Start checking for end every second
+        self.start_end_checker()
     
     def start_anti_join(self):
         """Start the gradual anti-join system"""
@@ -243,28 +223,27 @@ class GiveawayWinnersView(discord.ui.View):
             if remaining_to_add <= 0:
                 return
             
-            # Calculate delay based on giveaway duration
-            if self.initial_duration <= 60:
+            if self.duration_seconds <= 60:
                 min_delay = 0.5
                 max_delay = 1.5
                 max_per_batch = 10
-            elif self.initial_duration <= 180:
+            elif self.duration_seconds <= 180:
                 min_delay = 1
                 max_delay = 3
                 max_per_batch = 8
-            elif self.initial_duration <= 300:
+            elif self.duration_seconds <= 300:
                 min_delay = 2
                 max_delay = 5
                 max_per_batch = 6
-            elif self.initial_duration <= 600:
+            elif self.duration_seconds <= 600:
                 min_delay = 3
                 max_delay = 8
                 max_per_batch = 5
-            elif self.initial_duration <= 1800:
+            elif self.duration_seconds <= 1800:
                 min_delay = 5
                 max_delay = 12
                 max_per_batch = 4
-            elif self.initial_duration <= 3600:
+            elif self.duration_seconds <= 3600:
                 min_delay = 8
                 max_delay = 20
                 max_per_batch = 3
@@ -298,15 +277,21 @@ class GiveawayWinnersView(discord.ui.View):
         
         self.anti_join_task = asyncio.create_task(anti_join_loop())
     
-    def start_end_timer(self):
-        """Start the timer to end the giveaway"""
-        async def end_timer():
-            await asyncio.sleep(self.initial_duration)
-            if not self.ended:
-                await self.end_giveaway()
-            self.end_task = None
+    def start_end_checker(self):
+        """Check every second if giveaway should end"""
+        async def check_loop():
+            while not self.ended:
+                now = datetime.now()
+                if now >= self.end_time:
+                    await self.end_giveaway()
+                    break
+                await asyncio.sleep(1)
+                # Update embed every second
+                if not self.ended:
+                    await self.update_embed()
+            self.check_task = None
         
-        self.end_task = asyncio.create_task(end_timer())
+        self.check_task = asyncio.create_task(check_loop())
     
     def set_message_id(self, message_id: int):
         self.message_id = message_id
@@ -336,7 +321,6 @@ class GiveawayWinnersView(discord.ui.View):
         except:
             return
         embed = self.get_embed()
-        # Create new view with buttons
         new_view = discord.ui.View(timeout=None)
         new_view.add_item(JoinButton(self))
         new_view.add_item(ParticipantsButton(self))
@@ -348,13 +332,11 @@ class GiveawayWinnersView(discord.ui.View):
             return
         self.ended = True
         
-        # Stop auto update task
-        if self.update_task:
-            self.update_task.cancel()
-        
-        # Stop anti-join task if running
+        # Stop tasks
         if self.anti_join_task:
             self.anti_join_task.cancel()
+        if self.check_task:
+            self.check_task.cancel()
         
         channel = self.bot.get_channel(self.channel_id)
         if not channel:
@@ -393,7 +375,7 @@ class GiveawayWinnersView(discord.ui.View):
         winner_image = get_winner_image()
         send_mode = winner_image.get("send_mode", "private")
         
-        # Send DM only to real winners
+        # Send DM to real winners
         for winner_id in real_winners:
             try:
                 winner_user = await self.bot.fetch_user(winner_id)
@@ -434,10 +416,9 @@ class GiveawayWinnersView(discord.ui.View):
         embed.set_image(url=GIVEAWAY_BANNER_URL)
         embed.set_footer(text="Giveaway Ended")
         
-        # Edit message with no buttons (view=None)
         await message.edit(embed=embed, view=None)
         
-        # Send winner announcement in channel
+        # Send winner announcement
         if send_mode in ["server", "all"] and winner_image["url"] and real_winners:
             server_embed = discord.Embed(
                 title=f"{EMOJI_WINNER} **GIVEAWAY WINNERS!** {EMOJI_WINNER}",
@@ -453,7 +434,9 @@ class GiveawayWinnersView(discord.ui.View):
     
     def get_embed(self):
         total_participants = self.get_total_participants_display()
-        time_left = format_time(max(0, self.duration_seconds))
+        now = datetime.now()
+        remaining_seconds = max(0, int((self.end_time - now).total_seconds()))
+        time_left = format_time(remaining_seconds)
         end_timestamp = int(self.end_time.timestamp())
         
         description_text = f"# {EMOJI_TROPHY} {self.prize}\n\n"
@@ -481,20 +464,6 @@ class GiveawayWinnersView(discord.ui.View):
         embed.set_image(url=GIVEAWAY_BANNER_URL)
         embed.set_footer(text=f"Giveaway • {time_left} remaining")
         return embed
-
-async def create_repeat_winner_giveaway(bot, channel, title, description, prize, winners_count, duration_seconds, repeat_hours, forced_winners, participant_limit, fake_members_count, anti_join_count):
-    view = GiveawayWinnersView(
-        bot=bot, channel_id=channel.id, message_id=0,
-        title=title, description=description, prize=prize,
-        winners_count=winners_count, duration_seconds=duration_seconds,
-        is_daily=True, repeat_hours=repeat_hours,
-        forced_winners=forced_winners, participant_limit=participant_limit,
-        fake_members_count=fake_members_count,
-        anti_join_count=anti_join_count
-    )
-    embed = view.get_embed()
-    message = await channel.send(embed=embed, view=view)
-    view.set_message_id(message.id)
 
 def setup_giveaway_winner(bot):
     
