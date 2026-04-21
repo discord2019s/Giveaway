@@ -137,7 +137,8 @@ class GiveawayWinnersView(discord.ui.View):
         self.description = description
         self.prize = prize
         self.winners_count = winners_count
-        self.duration_seconds = duration_seconds
+        self.initial_duration = duration_seconds  # Store initial duration
+        self.duration_seconds = duration_seconds  # Will be updated for display
         self.is_daily = is_daily
         self.repeat_hours = repeat_hours
         self.forced_winners = forced_winners or []
@@ -150,6 +151,7 @@ class GiveawayWinnersView(discord.ui.View):
         self.end_time = get_end_time(duration_seconds)
         self.anti_join_task = None
         self.end_task = None
+        self.update_task = None
         
         # Add instant fake members
         for i in range(fake_members_count):
@@ -162,11 +164,31 @@ class GiveawayWinnersView(discord.ui.View):
         
         if message_id != 0:
             giveaway_state.register_giveaway(message_id, self, is_winner=True)
-            self.start_end_timer()  # Start timer when message_id is set
+            self.start_end_timer()
         
         # Start anti-join system if needed
         if anti_join_count > 0:
             self.start_anti_join()
+        
+        # Start auto-update every second
+        self.start_auto_update()
+    
+    def start_auto_update(self):
+        """Auto update embed every second to show remaining time"""
+        async def auto_update():
+            while not self.ended:
+                await asyncio.sleep(1)
+                if not self.ended:
+                    # Update remaining time
+                    now = datetime.now()
+                    remaining = int((self.end_time - now).total_seconds())
+                    if remaining < 0:
+                        remaining = 0
+                    self.duration_seconds = remaining
+                    await self.update_embed()
+            self.update_task = None
+        
+        self.update_task = asyncio.create_task(auto_update())
     
     def start_anti_join(self):
         """Start the gradual anti-join system"""
@@ -178,27 +200,27 @@ class GiveawayWinnersView(discord.ui.View):
                 return
             
             # Calculate delay based on giveaway duration
-            if self.duration_seconds <= 60:
+            if self.initial_duration <= 60:
                 min_delay = 0.5
                 max_delay = 1.5
                 max_per_batch = 10
-            elif self.duration_seconds <= 180:
+            elif self.initial_duration <= 180:
                 min_delay = 1
                 max_delay = 3
                 max_per_batch = 8
-            elif self.duration_seconds <= 300:
+            elif self.initial_duration <= 300:
                 min_delay = 2
                 max_delay = 5
                 max_per_batch = 6
-            elif self.duration_seconds <= 600:
+            elif self.initial_duration <= 600:
                 min_delay = 3
                 max_delay = 8
                 max_per_batch = 5
-            elif self.duration_seconds <= 1800:
+            elif self.initial_duration <= 1800:
                 min_delay = 5
                 max_delay = 12
                 max_per_batch = 4
-            elif self.duration_seconds <= 3600:
+            elif self.initial_duration <= 3600:
                 min_delay = 8
                 max_delay = 20
                 max_per_batch = 3
@@ -235,7 +257,7 @@ class GiveawayWinnersView(discord.ui.View):
     def start_end_timer(self):
         """Start the timer to end the giveaway"""
         async def end_timer():
-            await asyncio.sleep(self.duration_seconds)
+            await asyncio.sleep(self.initial_duration)
             if not self.ended:
                 await self.end_giveaway()
             self.end_task = None
@@ -311,6 +333,10 @@ class GiveawayWinnersView(discord.ui.View):
         if self.ended:
             return
         self.ended = True
+        
+        # Stop auto update task
+        if self.update_task:
+            self.update_task.cancel()
         
         # Stop anti-join task if running
         if self.anti_join_task:
@@ -406,7 +432,7 @@ class GiveawayWinnersView(discord.ui.View):
     
     def get_embed(self):
         total_participants = self.get_total_participants_display()
-        time_left = format_time(self.duration_seconds)
+        time_left = format_time(max(0, self.duration_seconds))
         end_timestamp = int(self.end_time.timestamp())
         
         description_text = f"# {EMOJI_TROPHY} {self.prize}\n\n"
