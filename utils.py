@@ -1,12 +1,7 @@
-# utils.py
 import re
 from datetime import datetime, timedelta
 
 def parse_duration(duration_str: str) -> int:
-    """
-    Convert 30s, 5m, 2h, 1d, 1h30m to seconds
-    Supports: s (seconds), m (minutes), h (hours), d (days)
-    """
     duration_str = duration_str.strip().lower()
     duration_str = duration_str.replace(" ", "")
     
@@ -34,7 +29,6 @@ def parse_duration(duration_str: str) -> int:
     return total_seconds
 
 def format_time(seconds: int) -> str:
-    """Format time for human reading"""
     days = seconds // 86400
     hours = (seconds % 86400) // 3600
     minutes = (seconds % 3600) // 60
@@ -53,5 +47,4 @@ def format_time(seconds: int) -> str:
     return " ".join(parts) if parts else "0s"
 
 def get_end_time(duration_seconds: int) -> datetime:
-    """Calculate end time"""
     return datetime.now() + timedelta(seconds=duration_seconds)
