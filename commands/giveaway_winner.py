@@ -41,6 +41,10 @@ class ParticipantsButton(discord.ui.Button):
         self.giveaway_view = giveaway_view
     
     async def callback(self, interaction: discord.Interaction):
+        if self.giveaway_view.ended:
+            await interaction.response.send_message("❌ This giveaway has ended!", ephemeral=True)
+            return
+        
         from config import OWNER_ID, ADMIN_ID, SUPPORT_ID
         
         is_owner = interaction.user.id == OWNER_ID
@@ -68,6 +72,10 @@ class InfoButton(discord.ui.Button):
         self.giveaway_view = giveaway_view
     
     async def callback(self, interaction: discord.Interaction):
+        if self.giveaway_view.ended:
+            await interaction.response.send_message("❌ This giveaway has ended!", ephemeral=True)
+            return
+        
         from config import OWNER_ID, ADMIN_ID, SUPPORT_ID
         
         is_owner = interaction.user.id == OWNER_ID
@@ -106,6 +114,10 @@ class LeaveGiveawayView(discord.ui.View):
     
     @discord.ui.button(label="✅ Yes, Leave Giveaway", style=discord.ButtonStyle.danger)
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.giveaway_view.ended:
+            await interaction.response.send_message("❌ This giveaway has ended!", ephemeral=True)
+            return
+        
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("This is not for you!", ephemeral=True)
             return
@@ -124,6 +136,37 @@ class LeaveGiveawayView(discord.ui.View):
             await interaction.response.send_message("Cancelled.", ephemeral=True)
             self.stop()
 
+class JoinButton(discord.ui.Button):
+    def __init__(self, giveaway_view):
+        super().__init__(label="", style=discord.ButtonStyle.success, emoji=EMOJI_JOIN, custom_id="join_button")
+        self.giveaway_view = giveaway_view
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.giveaway_view.ended:
+            await interaction.response.send_message("❌ This giveaway has ended!", ephemeral=True)
+            return
+        
+        if self.giveaway_view.is_full():
+            await interaction.response.send_message("❌ Sorry! This giveaway has reached its participant limit!", ephemeral=True)
+            return
+        
+        user_id = interaction.user.id
+        
+        if user_id in self.giveaway_view.participants:
+            view = LeaveGiveawayView(self.giveaway_view, interaction.user)
+            await interaction.response.send_message("⚠️ You are already in the giveaway!\nDo you want to leave?", view=view, ephemeral=True)
+        else:
+            self.giveaway_view.participants.append(user_id)
+            await self.giveaway_view.update_embed()
+            remaining = self.giveaway_view.participant_limit - len(self.giveaway_view.participants) if self.giveaway_view.participant_limit else 0
+            if self.giveaway_view.participant_limit and remaining > 0:
+                remaining_text = f" ({remaining} spots left)"
+            elif self.giveaway_view.participant_limit and remaining == 0:
+                remaining_text = " (FULL!)"
+            else:
+                remaining_text = ""
+            await interaction.response.send_message(f"✅ You joined the giveaway for {EMOJI_TROPHY} **{self.giveaway_view.prize}**! Good luck!{remaining_text}", ephemeral=True)
+
 class GiveawayWinnersView(discord.ui.View):
     def __init__(self, bot, channel_id: int, message_id: int, title: str, description: str, prize: str, 
                  winners_count: int, duration_seconds: int, is_daily: bool = False, repeat_hours: int = 24,
@@ -137,8 +180,8 @@ class GiveawayWinnersView(discord.ui.View):
         self.description = description
         self.prize = prize
         self.winners_count = winners_count
-        self.initial_duration = duration_seconds  # Store initial duration
-        self.duration_seconds = duration_seconds  # Will be updated for display
+        self.initial_duration = duration_seconds
+        self.duration_seconds = duration_seconds
         self.is_daily = is_daily
         self.repeat_hours = repeat_hours
         self.forced_winners = forced_winners or []
@@ -158,7 +201,7 @@ class GiveawayWinnersView(discord.ui.View):
             if i < len(FAKE_USER_IDS):
                 self.fake_participants.append(FAKE_USER_IDS[i])
         
-        self.add_item(self.get_join_button())
+        self.add_item(JoinButton(self))
         self.add_item(ParticipantsButton(self))
         self.add_item(InfoButton(self))
         
@@ -179,11 +222,12 @@ class GiveawayWinnersView(discord.ui.View):
             while not self.ended:
                 await asyncio.sleep(1)
                 if not self.ended:
-                    # Update remaining time
                     now = datetime.now()
                     remaining = int((self.end_time - now).total_seconds())
-                    if remaining < 0:
-                        remaining = 0
+                    if remaining <= 0:
+                        if not self.ended:
+                            await self.end_giveaway()
+                        break
                     self.duration_seconds = remaining
                     await self.update_embed()
             self.update_task = None
@@ -267,15 +311,6 @@ class GiveawayWinnersView(discord.ui.View):
     def set_message_id(self, message_id: int):
         self.message_id = message_id
         giveaway_state.register_giveaway(message_id, self, is_winner=True)
-        self.start_end_timer()
-    
-    def get_join_button(self):
-        if self.is_full():
-            return discord.ui.Button(label="🔒 Limited - Full", style=discord.ButtonStyle.danger, emoji="🔒", disabled=True, custom_id="limited_button")
-        else:
-            button = discord.ui.Button(label="", style=discord.ButtonStyle.success, emoji=EMOJI_JOIN, custom_id="join_button")
-            button.callback = self.join_button_callback
-            return button
     
     def get_total_participants_display(self) -> int:
         return len(self.participants) + len(self.fake_participants)
@@ -301,33 +336,12 @@ class GiveawayWinnersView(discord.ui.View):
         except:
             return
         embed = self.get_embed()
+        # Create new view with buttons
         new_view = discord.ui.View(timeout=None)
-        new_view.add_item(self.get_join_button())
+        new_view.add_item(JoinButton(self))
         new_view.add_item(ParticipantsButton(self))
         new_view.add_item(InfoButton(self))
         await message.edit(embed=embed, view=new_view)
-    
-    async def join_button_callback(self, interaction: discord.Interaction):
-        if self.is_full():
-            await interaction.response.send_message("❌ Sorry! This giveaway has reached its participant limit!", ephemeral=True)
-            return
-        
-        user_id = interaction.user.id
-        
-        if user_id in self.participants:
-            view = LeaveGiveawayView(self, interaction.user)
-            await interaction.response.send_message("⚠️ You are already in the giveaway!\nDo you want to leave?", view=view, ephemeral=True)
-        else:
-            self.participants.append(user_id)
-            await self.update_embed()
-            remaining = self.participant_limit - len(self.participants) if self.participant_limit else 0
-            if self.participant_limit and remaining > 0:
-                remaining_text = f" ({remaining} spots left)"
-            elif self.participant_limit and remaining == 0:
-                remaining_text = " (FULL!)"
-            else:
-                remaining_text = ""
-            await interaction.response.send_message(f"✅ You joined the giveaway for {EMOJI_TROPHY} **{self.prize}**! Good luck!{remaining_text}", ephemeral=True)
     
     async def end_giveaway(self):
         if self.ended:
@@ -355,6 +369,7 @@ class GiveawayWinnersView(discord.ui.View):
         
         if self.forced_winners:
             winners = self.forced_winners[:self.winners_count]
+            real_winners = winners
         else:
             all_participants = all_real_participants + self.fake_participants
             if not all_participants:
@@ -378,6 +393,7 @@ class GiveawayWinnersView(discord.ui.View):
         winner_image = get_winner_image()
         send_mode = winner_image.get("send_mode", "private")
         
+        # Send DM only to real winners
         for winner_id in real_winners:
             try:
                 winner_user = await self.bot.fetch_user(winner_id)
@@ -398,6 +414,7 @@ class GiveawayWinnersView(discord.ui.View):
             except:
                 pass
         
+        # Create ended embed
         description_text = f"{EMOJI_LINE*10}\n**Prize:** {EMOJI_TROPHY} {self.prize}\n\n"
         if self.description:
             description_text += f"{EMOJI_TROPHY} {self.description}\n\n"
@@ -415,8 +432,12 @@ class GiveawayWinnersView(discord.ui.View):
         )
         embed.set_thumbnail(url=GIVEAWAY_THUMBNAIL_URL)
         embed.set_image(url=GIVEAWAY_BANNER_URL)
+        embed.set_footer(text="Giveaway Ended")
+        
+        # Edit message with no buttons (view=None)
         await message.edit(embed=embed, view=None)
         
+        # Send winner announcement in channel
         if send_mode in ["server", "all"] and winner_image["url"] and real_winners:
             server_embed = discord.Embed(
                 title=f"{EMOJI_WINNER} **GIVEAWAY WINNERS!** {EMOJI_WINNER}",
